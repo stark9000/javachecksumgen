@@ -5,14 +5,24 @@
  */
 package checksum;
 
+import ibxm.IBXM;
+import ibxm.Module;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.charset.Charset;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.SourceDataLine;
 import javax.swing.JFileChooser;
 
 /**
@@ -28,6 +38,11 @@ public class checksumCalc extends javax.swing.JFrame {
     private long c;
     private String s;
     private String m;
+    private static final int SAMPLE_RATE = 48000;
+    private Module module;
+    private IBXM ibxm;
+    private volatile boolean playing;
+    private Thread playThread;
 
     /**
      * Creates new form checksumCalc
@@ -36,6 +51,7 @@ public class checksumCalc extends javax.swing.JFrame {
         initComponents();
         jButton4.setEnabled(false);
         jButton5.setEnabled(false);
+        LoadMoDFile();
     }
 
     /**
@@ -55,12 +71,12 @@ public class checksumCalc extends javax.swing.JFrame {
         jScrollPane1 = new javax.swing.JScrollPane();
         jTextArea1 = new javax.swing.JTextArea();
         jButton2 = new javax.swing.JButton();
-        jButton3 = new javax.swing.JButton();
         jButton4 = new javax.swing.JButton();
         jSeparator1 = new javax.swing.JSeparator();
         jButton5 = new javax.swing.JButton();
         jLabel3 = new javax.swing.JLabel();
         jSeparator2 = new javax.swing.JSeparator();
+        jToggleButton1 = new javax.swing.JToggleButton();
         jMenuBar1 = new javax.swing.JMenuBar();
         jMenu1 = new javax.swing.JMenu();
         jMenu2 = new javax.swing.JMenu();
@@ -108,9 +124,6 @@ public class checksumCalc extends javax.swing.JFrame {
         jButton2.setText("about");
         getContentPane().add(jButton2, new org.netbeans.lib.awtextra.AbsoluteConstraints(329, 11, -1, -1));
 
-        jButton3.setText("music");
-        getContentPane().add(jButton3, new org.netbeans.lib.awtextra.AbsoluteConstraints(264, 11, -1, -1));
-
         jButton4.setText("copy");
         jButton4.addActionListener(new java.awt.event.ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent evt) {
@@ -129,6 +142,14 @@ public class checksumCalc extends javax.swing.JFrame {
         getContentPane().add(jButton5, new org.netbeans.lib.awtextra.AbsoluteConstraints(340, 200, -1, -1));
         getContentPane().add(jLabel3, new org.netbeans.lib.awtextra.AbsoluteConstraints(10, 200, 320, 20));
         getContentPane().add(jSeparator2, new org.netbeans.lib.awtextra.AbsoluteConstraints(0, 230, 400, 20));
+
+        jToggleButton1.setText("music");
+        jToggleButton1.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                jToggleButton1ActionPerformed(evt);
+            }
+        });
+        getContentPane().add(jToggleButton1, new org.netbeans.lib.awtextra.AbsoluteConstraints(250, 10, 70, -1));
 
         jMenu1.setText("File");
         jMenuBar1.add(jMenu1);
@@ -183,6 +204,16 @@ public class checksumCalc extends javax.swing.JFrame {
 
         }
     }//GEN-LAST:event_jButton5ActionPerformed
+
+    private void jToggleButton1ActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_jToggleButton1ActionPerformed
+
+        if (jToggleButton1.isSelected()) {
+            play();
+        } else {
+            stop();
+        }
+
+    }//GEN-LAST:event_jToggleButton1ActionPerformed
     private void getCheckSum() {
         if (jTextField1.getText().isEmpty()) {
 
@@ -265,7 +296,6 @@ public class checksumCalc extends javax.swing.JFrame {
     // Variables declaration - do not modify//GEN-BEGIN:variables
     private javax.swing.JButton jButton1;
     private javax.swing.JButton jButton2;
-    private javax.swing.JButton jButton3;
     private javax.swing.JButton jButton4;
     private javax.swing.JButton jButton5;
     private javax.swing.JComboBox jComboBox1;
@@ -280,5 +310,93 @@ public class checksumCalc extends javax.swing.JFrame {
     private javax.swing.JSeparator jSeparator2;
     private javax.swing.JTextArea jTextArea1;
     private javax.swing.JTextField jTextField1;
+    private javax.swing.JToggleButton jToggleButton1;
     // End of variables declaration//GEN-END:variables
+ private synchronized void stop() {
+        playing = false;
+        try {
+            if (playThread != null) {
+                playThread.join();
+            }
+        } catch (InterruptedException e) {
+        }
+//        Play.setText(">");
+    }
+
+    private synchronized int getAudio(int[] mixBuf) {
+        int count = ibxm.getAudio(mixBuf);
+        return count;
+    }
+
+    private synchronized void play() {
+        if (ibxm != null) {
+            playing = true;
+            playThread = new Thread(new Runnable() {
+
+                @Override
+                public void run() {
+                    int[] mixBuf = new int[ibxm.getMixBufferLength()];
+                    byte[] outBuf = new byte[mixBuf.length * 4];
+                    AudioFormat audioFormat = null;
+                    SourceDataLine audioLine = null;
+                    try {
+                        audioFormat = new AudioFormat(SAMPLE_RATE, 16, 2, true, true);
+                        audioLine = AudioSystem.getSourceDataLine(audioFormat);
+                        audioLine.open();
+                        audioLine.start();
+                        while (playing) {
+                            int count = getAudio(mixBuf);
+                            int outIdx = 0;
+                            for (int mixIdx = 0, mixEnd = count * 2; mixIdx < mixEnd; mixIdx++) {
+                                int ampl = mixBuf[mixIdx];
+                                if (ampl > 32767) {
+                                    ampl = 32767;
+                                }
+                                if (ampl < -32768) {
+                                    ampl = -32768;
+                                }
+                                outBuf[outIdx++] = (byte) (ampl >> 8);
+                                outBuf[outIdx++] = (byte) ampl;
+                            }
+                            audioLine.write(outBuf, 0, outIdx);
+                        }
+                        audioLine.drain();
+                    } catch (Exception e) {
+                    } finally {
+                        if (audioLine != null && audioLine.isOpen()) {
+                            audioLine.close();
+                        }
+                    }
+                }
+            });
+            playThread.start();
+            // Play.setText("||");
+        }
+    }
+
+    public void LoadMoDFile() {
+        URL filep = checksumCalc.class.getResource("/checksum/res/lhs_rld3.xm");
+        try {
+            File music = new File(filep.toURI());
+            loadModule(music);
+        } catch (URISyntaxException | IOException ex) {
+
+        }
+    }
+
+    private synchronized void loadModule(File modFile) throws IOException {
+        byte[] moduleData = new byte[(int) modFile.length()];
+        FileInputStream inputStream = new FileInputStream(modFile);
+        int offset = 0;
+        while (offset < moduleData.length) {
+            int len = inputStream.read(moduleData, offset, moduleData.length - offset);
+            if (len < 0) {
+                throw new IOException("Unexpected end of file.");
+            }
+            offset += len;
+        }
+        inputStream.close();
+        module = new Module(moduleData);
+        ibxm = new IBXM(module, SAMPLE_RATE);
+    }
 }
